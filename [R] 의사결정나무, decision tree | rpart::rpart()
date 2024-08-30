@@ -1,0 +1,108 @@
+# preprocessing
+library(dplyr)
+library(readr)
+
+# vizualizing
+library(ggplot2)
+library(rpart.plot)
+library(vip)
+library(pdp) # 이번 실습에서는 사용하지 않는다. (이유는 후술)
+
+# modeling
+library(caret) # predict를 수행
+library(rpart) # Decision tree 학습
+
+# 데이터 불러오기---------------------------------------
+# 데이터를 불러올 때에는 kaggle의
+# https://www.kaggle.com/competitions/playground-series-s4e2/data?select=train.csv 링크의 train.csv
+df <- read_csv("데이터의 경로")
+
+# 결과변수의 비율을 유치한 채 데이터 분할 train : dev (8 : 2)
+set.seed(123)
+train_index <- createDataPartition(df$NObeyesdad, p = 0.7, list=FALSE)
+
+# train set
+df_train <- df[train_index,]
+df_train <- df_train %>% 
+  mutate(across(where(is.character), as.factor)) %>% 
+  select(-id)
+str(df_train)
+
+# dev set
+df_dev <- df[-train_index,] %>% 
+  mutate(across(where(is.character), as.factor)) %>% 
+  select(-id)
+str(df_dev)
+
+# Cross validation 설정---------------------------------
+train_cv <- trainControl(
+  method = "cv",
+  number = 5,
+  savePredictions = "all", # 결과값 저장
+  summaryFunction = multiClassSummary # 모델성능 평가 (cv의 모델성능 요약)
+)
+
+# 모델 학습---------------------------------------------
+# Girdsearch 포함.
+# caret을 사용할 경우 cp만을 튜닝할 수 있다.
+# 다른 파라미터 튜닝을 원할경우 "mlr"과 같은 다른 패키기를 사용.
+set.seed(123)
+dt1_tune <- train(NObeyesdad ~ ., 
+             data=df_train,
+             method = "rpart",
+             trControl = train_cv,
+             tuneGrid = expand.grid(cp = seq(0.05, 0.2, 0.01)),
+             metric = "Accuracy")
+
+set.seed(123)
+dt1_no_tune <- train(NObeyesdad ~ ., 
+                     data=df_train,
+                     method = "rpart",
+                     trControl = train_cv,
+                     metric = "Accuracy")
+
+# 학습 결과 확인
+dt1_tune$bestTune
+dt1_no_tune$bestTune
+
+
+# 예측 수행------------------------------------------------------
+# 변수들의 class imbalance 때문에 warning이 출력된다.
+# 현제 모델링은 단순 실습이기에 그대로 진행한다.
+pred1_tune <- predict(dt1_tune, newdata = df_dev)
+pred1_no_tune <- predict(dt1_no_tune, newdata = df_dev)
+
+# 학습 결과 평가 ---------------------------------------
+conf_matrix_tune <- confusionMatrix(pred1_tune, df_dev$NObeyesdad)
+conf_matrix_no_tune <- confusionMatrix(pred1_no_tune, df_dev$NObeyesdad)
+
+# 평가 지표 출력을 위한 함수 정의
+# Accuracy, Average_precision, Average_recall, Average_F1score
+eval_func <- function(conf_matrix){
+  class_metrics <- conf_matrix$byClass
+  
+  accuracy <- conf_matrix$overall['Accuracy']
+  precision <- mean(ifelse(is.na(class_metrics[,'Pos Pred Value']), 0, class_metrics[,'Pos Pred Value']))
+  recall <- mean(ifelse(is.na(class_metrics[,'Sensitivity']), 0, class_metrics[,'Sensitivity']))
+  f1_score <- mean(ifelse(is.na(class_metrics[,'F1']), 0, class_metrics[,'F1']))
+  
+  print(paste("Accuracy:", round(accuracy, 4)))
+  print(paste("Average Precision:", round(precision, 4)))
+  print(paste("Average Recall:", round(recall, 4)))
+  print(paste("Average F1 Score:", round(f1_score, 4)))
+}
+
+# 함수를 적용하여 평가 지표 출력
+eval_func(conf_matrix_tune)
+eval_func(conf_matrix_no_tune)
+
+# 결과 시각화 확인--------------------------------------------------------------
+# CV와 cp를 튜닝하였기에 finalModel을 출력한다.
+rpart.plot(dt1_tune$finalModel) # 튜닝을 하여 성능은 좋아지지만 복잡해진다.
+rpart.plot(dt1_no_tune$finalModel) # 튜닝이 없으면 단순하지만 성능이 떨어진다.
+
+# 변수 중요도 확인
+vip(dt1_tune) +
+  theme_minimal()
+vip(dt1_no_tune) +
+  theme_minimal()
